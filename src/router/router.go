@@ -132,8 +132,8 @@ type AnthropicUsage struct {
 }
 
 func main() {
-	configPath := flag.String("config", "config/router.json", "router config file")
-	keysPath := flag.String("keys", "config/keys.json", "api key config file")
+	configPath := flag.String("config", defaultConfigPath("router.json"), "router config file")
+	keysPath := flag.String("keys", defaultConfigPath("keys.json"), "api key config file")
 	flag.Parse()
 
 	router, err := NewRouter(*configPath, *keysPath)
@@ -160,6 +160,9 @@ func main() {
 }
 
 func NewRouter(configPath, keysPath string) (*Router, error) {
+	configPath = expandPath(configPath)
+	keysPath = expandPath(keysPath)
+
 	var cfg Config
 	if err := readJSON(configPath, &cfg); err != nil {
 		return nil, err
@@ -702,6 +705,34 @@ func contentToString(content interface{}) string {
 	default:
 		return fmt.Sprint(value)
 	}
+}
+
+func defaultConfigPath(name string) string {
+	configDir, err := os.UserConfigDir()
+	if err != nil || configDir == "" {
+		homeDir, homeErr := os.UserHomeDir()
+		if homeErr != nil || homeDir == "" {
+			return filepath.Join(".config", "router", name)
+		}
+		configDir = filepath.Join(homeDir, ".config")
+	}
+	return filepath.Join(configDir, "router", name)
+}
+
+func expandPath(path string) string {
+	if path == "~" {
+		homeDir, err := os.UserHomeDir()
+		if err == nil && homeDir != "" {
+			return homeDir
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil && homeDir != "" {
+			return filepath.Join(homeDir, path[2:])
+		}
+	}
+	return path
 }
 
 func translateAnthropic(raw []byte, publicModel string) ([]byte, error) {
