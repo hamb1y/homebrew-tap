@@ -13,10 +13,10 @@ class Router < Formula
 
   def caveats
     <<~EOS
-      Create config/router.json and config/keys.json before running:
-        router -config config/router.json -keys config/keys.json
+      Create ~/.config/router/router.json and ~/.config/router/keys.json before running:
+        router
 
-      OAuth2 auth files are read from config/auth/ by default.
+      OAuth2 auth files are read from ~/.config/router/auth/ by default.
     EOS
   end
 
