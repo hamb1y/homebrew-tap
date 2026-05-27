@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="codex-switcher"
+CODEX_DIR="${CODEX_DIR:-$HOME/.codex}"
+AUTH_FILE="${CODEX_AUTH_FILE:-$CODEX_DIR/auth.json}"
+STORE_DIR="${CODEX_SWITCHER_DIR:-$HOME/.codex-switcher}"
+ACCOUNTS_DIR="$STORE_DIR/accounts"
+BACKUPS_DIR="$STORE_DIR/backups"
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+ui() {
+  if command -v gum >/dev/null 2>&1; then
+    gum "$@"
+  else
+    return 127
+  fi
+}
+
+title() {
+  ui style --bold --foreground 212 "$APP_NAME" || echo "$APP_NAME"
+}
+
+info() {
+  ui style --foreground 244 "$*" || echo "$*"
+}
+
+ok() {
+  ui style --foreground 42 "$*" || echo "$*"
+}
+
+warn() {
+  ui style --foreground 214 "$*" || echo "$*"
+}
+
+fail() {
+  ui style --foreground 196 "$*" || echo "$*" >&2
+}
+
+slugify() {
+  printf '%s' "$1" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+auth_hash() {
+  if [[ -f "$AUTH_FILE" ]]; then
+    hash_file "$AUTH_FILE"
+  fi
+}
+
+account_hash() {
+  local account="$1"
+  hash_file "$ACCOUNTS_DIR/$account/auth.json"
+}
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+ensure_dirs() {
+  mkdir -p "$CODEX_DIR" "$ACCOUNTS_DIR" "$BACKUPS_DIR"
+  chmod 700 "$STORE_DIR" "$ACCOUNTS_DIR" "$BACKUPS_DIR" 2>/dev/null || true
+}
+
+account_names() {
+  local account
+  find "$ACCOUNTS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
+}
+
+has_accounts() {
+  [[ -n "$(account_names)" ]]
+}
+
+account_label() {
+  local account="$1"
+  if [[ -f "$ACCOUNTS_DIR/$account/label" ]]; then
+    head -n 1 "$ACCOUNTS_DIR/$account/label"
+  else
+    printf '%s\n' "$account"
+  fi
+}
+
+active_account() {
+  local current account
+  current="$(auth_hash || true)"
+  [[ -n "$current" ]] || return 0
+
+  while IFS= read -r account; do
+    [[ -f "$ACCOUNTS_DIR/$account/auth.json" ]] || continue
+    if [[ "$(account_hash "$account")" == "$current" ]]; then
+      account_label "$account"
+      return 0
+    fi
+  done < <(account_names)
+}
+
+backup_auth() {
+  [[ -f "$AUTH_FILE" ]] || return 0
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  cp -p "$AUTH_FILE" "$BACKUPS_DIR/auth.$stamp.json"
+  chmod 600 "$BACKUPS_DIR/auth.$stamp.json"
+}
+
+save_current_as() {
+  if [[ ! -f "$AUTH_FILE" ]]; then
+    warn "No active auth file at $AUTH_FILE"
+    return 0
+  fi
+
+  local label slug dest
+  label="$(ui input --header "Save current Codex login" --placeholder "Account label, e.g. work or personal" --char-limit 80)"
+  [[ -n "$label" ]] || return 0
+  slug="$(slugify "$label")"
+  [[ -n "$slug" ]] || slug="account"
+  dest="$ACCOUNTS_DIR/$slug"
+
+  if [[ -e "$dest" ]]; then
+    if ! ui confirm "Replace saved account '$slug'?" --negative "Cancel" --affirmative "Replace"; then
+      return 0
+    fi
+  fi
+
+  mkdir -p "$dest"
+  cp -p "$AUTH_FILE" "$dest/auth.json"
+  printf '%s\n' "$label" > "$dest/label"
+  chmod 700 "$dest"
+  chmod 600 "$dest/auth.json" "$dest/label"
+  ok "Saved current login as: $label"
+}
+
+switch_account() {
+  local choices=() account label selected selected_account
+  while IFS= read -r account; do
+    label="$(account_label "$account")"
+    choices+=("$label|$account")
+  done < <(account_names)
+
+  if [[ "${#choices[@]}" -eq 0 ]]; then
+    warn "No saved accounts yet. Use 'Save current login' or 'Login as new account'."
+    return 0
+  fi
+
+  selected="$(printf '%s\n' "${choices[@]}" | gum choose --header "Switch to account" --label-delimiter "|" --select-if-one)"
+  [[ -n "$selected" ]] || return 0
+
+  selected_account="$selected"
+
+  backup_auth
+  cp -p "$ACCOUNTS_DIR/$selected_account/auth.json" "$AUTH_FILE"
+  chmod 600 "$AUTH_FILE"
+  ok "Switched active Codex login to: $(account_label "$selected_account")"
+}
+
+login_new_account() {
+  local label mode slug dest old_tmp
+  label="$(ui input --header "New account label" --placeholder "Account label, e.g. work or personal" --char-limit 80)"
+  [[ -n "$label" ]] || return 0
+  slug="$(slugify "$label")"
+  [[ -n "$slug" ]] || slug="account"
+  dest="$ACCOUNTS_DIR/$slug"
+
+  mode="$(printf 'OAuth browser login\nAPI key login' | gum choose --header "Login method")"
+  [[ -n "$mode" ]] || return 0
+
+  old_tmp=""
+  if [[ -f "$AUTH_FILE" ]]; then
+    old_tmp="$(mktemp "$STORE_DIR/current-auth.XXXXXX")"
+  fi
+
+  backup_auth
+  if [[ -n "$old_tmp" ]]; then
+    mv -f "$AUTH_FILE" "$old_tmp"
+  fi
+
+  if [[ "$mode" == "API key login" ]]; then
+    local key
+    key="$(ui input --password --header "OpenAI API key" --placeholder "sk-..." --char-limit 0)"
+    if [[ -z "$key" ]]; then
+      restore_tmp "$old_tmp"
+      return 0
+    fi
+    if ! printf '%s\n' "$key" | codex login --with-api-key; then
+      restore_tmp "$old_tmp"
+      fail "Codex API-key login failed."
+      return 1
+    fi
+  else
+    if ! codex login; then
+      restore_tmp "$old_tmp"
+      fail "Codex OAuth browser login failed."
+      return 1
+    fi
+  fi
+
+  if [[ ! -f "$AUTH_FILE" ]]; then
+    restore_tmp "$old_tmp"
+    fail "Codex login did not create $AUTH_FILE"
+    return 1
+  fi
+
+  if [[ -e "$dest" ]] && ! ui confirm "Replace saved account '$slug'?" --negative "Cancel" --affirmative "Replace"; then
+    restore_tmp "$old_tmp"
+    return 0
+  fi
+
+  mkdir -p "$dest"
+  cp -p "$AUTH_FILE" "$dest/auth.json"
+  printf '%s\n' "$label" > "$dest/label"
+  chmod 700 "$dest"
+  chmod 600 "$dest/auth.json" "$dest/label"
+
+  if [[ -n "$old_tmp" ]] && ui confirm "Restore the account that was active before this login?" --default --affirmative "Restore" --negative "Keep new active"; then
+    restore_tmp "$old_tmp"
+  else
+    rm -f "$old_tmp"
+  fi
+
+  ok "Saved new login as: $label"
+}
+
+restore_tmp() {
+  local old_tmp="${1:-}"
+  if [[ -n "$old_tmp" && -f "$old_tmp" ]]; then
+    cp -p "$old_tmp" "$AUTH_FILE"
+    chmod 600 "$AUTH_FILE"
+    rm -f "$old_tmp"
+  fi
+}
+
+list_accounts() {
+  local current account marker
+  current="$(auth_hash || true)"
+
+  if ! has_accounts; then
+    warn "No saved accounts."
+    return 0
+  fi
+
+  printf 'Active\tName\tID\n'
+  while IFS= read -r account; do
+    marker=""
+    if [[ -n "$current" && -f "$ACCOUNTS_DIR/$account/auth.json" && "$(account_hash "$account")" == "$current" ]]; then
+      marker="yes"
+    fi
+    printf '%s\t%s\t%s\n' "$marker" "$(account_label "$account")" "$account"
+  done < <(account_names)
+}
+
+delete_account() {
+  local choices=() account label selected selected_account
+  while IFS= read -r account; do
+    label="$(account_label "$account")"
+    choices+=("$label|$account")
+  done < <(account_names)
+
+  if [[ "${#choices[@]}" -eq 0 ]]; then
+    warn "No saved accounts to delete."
+    return 0
+  fi
+
+  selected="$(printf '%s\n' "${choices[@]}" | gum choose --header "Delete saved account" --label-delimiter "|" --select-if-one)"
+  [[ -n "$selected" ]] || return 0
+
+  selected_account="$selected"
+
+  if ui confirm "Delete saved account '$(account_label "$selected_account")'?" --negative "Cancel" --affirmative "Delete"; then
+    local stamp
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    mv "$ACCOUNTS_DIR/$selected_account" "$BACKUPS_DIR/deleted.$selected_account.$stamp"
+    ok "Moved saved account to backups: $selected_account"
+  fi
+}
+
+show_status() {
+  local active
+  active="$(active_account || true)"
+  title
+  info "Codex auth: $AUTH_FILE"
+  info "Switcher store: $STORE_DIR"
+  if [[ -n "$active" ]]; then
+    ok "Active saved account: $active"
+  elif [[ -f "$AUTH_FILE" ]]; then
+    warn "Active auth is not one of the saved accounts."
+  else
+    warn "No active auth file."
+  fi
+  echo
+  if has_accounts && [[ -t 0 && -t 1 ]]; then
+    list_accounts | gum table --separator $'\t' --height 12
+  else
+    list_accounts
+  fi
+}
+
+main_menu() {
+  local active choice
+  active="$(active_account || true)"
+  title
+  if [[ -n "$active" ]]; then
+    info "Active: $active"
+  elif [[ -f "$AUTH_FILE" ]]; then
+    info "Active: unsaved login"
+  else
+    info "Active: none"
+  fi
+
+  choice="$(gum choose --header "What do you want to do?" \
+    "Switch account" \
+    "Save current login" \
+    "Login as new account" \
+    "List accounts" \
+    "Delete saved account" \
+    "Quit")"
+
+  case "$choice" in
+    "Switch account") switch_account ;;
+    "Save current login") save_current_as ;;
+    "Login as new account") login_new_account ;;
+    "List accounts") show_status ;;
+    "Delete saved account") delete_account ;;
+    *) exit 0 ;;
+  esac
+}
+
+main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+    usage
+    exit 0
+  fi
+
+  need sed
+  need awk
+  need find
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    need shasum
+  fi
+
+  case "${1:-}" in
+    ""|menu|switch|save|login|delete)
+      need gum
+      need codex
+      ;;
+  esac
+
+  ensure_dirs
+
+  case "${1:-}" in
+    switch) switch_account ;;
+    save) save_current_as ;;
+    login) login_new_account ;;
+    list|status) show_status ;;
+    delete) delete_account ;;
+    ""|menu) main_menu ;;
+    *) usage ;;
+  esac
+}
+
+usage() {
+  cat <<USAGE
+Usage: codex-switcher [menu|switch|save|login|list|status|delete]
+
+Profiles are stored in: $STORE_DIR
+Active Codex auth file: $AUTH_FILE
+USAGE
+}
+
+main "$@"
