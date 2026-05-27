@@ -201,20 +201,38 @@ class Router < Formula
       Runtime endpoints:
 
       - `GET http://127.0.0.1:8080/status`
+      - `GET http://127.0.0.1:8080/model`
+      - `POST http://127.0.0.1:8080/set-model`
+      - `POST http://127.0.0.1:8080/set-intelligence`
       - `GET http://127.0.0.1:8080/v1/models`
-      - `POST http://127.0.0.1:8080/v1/router/model`
       - `POST http://127.0.0.1:8080/v1/chat/completions`
 
-      Switch active smart/dumb model:
+      Show the current model:
 
       ```sh
-      curl -X POST http://127.0.0.1:8080/v1/router/model \\
+      curl http://127.0.0.1:8080/model
+      ```
+
+      Set the current concrete model:
+
+      ```sh
+      curl -X POST http://127.0.0.1:8080/set-model \\
         -H 'content-type: application/json' \\
-        -d '{"class":"smart","model":"smart"}'
+        -d '{"model":"smart"}'
+      ```
+
+      Set the current intelligence:
+
+      ```sh
+      curl -X POST http://127.0.0.1:8080/set-intelligence \\
+        -H 'content-type: application/json' \\
+        -d '{"intelligence":"smart"}'
       ```
 
       To use a specific configured model for one request, set the chat request
       `model` field to that configured model name instead of `smart` or `dumb`.
+      If the chat request omits `model`, router uses the current
+      intelligence/model shown by `/model`.
 
       OAuth2 auth files are read from `auth/` by default. For example, a provider
       with `"auth_file": "codex.json"` reads `~/.config/router/auth/codex.json`.

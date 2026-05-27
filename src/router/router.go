@@ -54,6 +54,7 @@ type Router struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
 	active     map[string]string
+	current    string
 }
 
 type ChatRequest struct {
@@ -79,11 +80,14 @@ type ModelChoice struct {
 }
 
 type StatusResponse struct {
-	Status    string            `json:"status"`
-	Listen    string            `json:"listen"`
-	Active    map[string]string `json:"active"`
-	Providers map[string]string `json:"providers"`
-	Models    []StatusModel     `json:"models"`
+	Status              string            `json:"status"`
+	Listen              string            `json:"listen"`
+	CurrentIntelligence string            `json:"current_intelligence"`
+	CurrentModel        string            `json:"current_model"`
+	CurrentProvider     string            `json:"current_provider,omitempty"`
+	Active              map[string]string `json:"active"`
+	Providers           map[string]string `json:"providers"`
+	Models              []StatusModel     `json:"models"`
 }
 
 type StatusModel struct {
@@ -94,9 +98,13 @@ type StatusModel struct {
 	Active   bool   `json:"active"`
 }
 
-type SwitchRequest struct {
-	Class string `json:"class"`
+type SetModelRequest struct {
 	Model string `json:"model"`
+}
+
+type SetIntelligenceRequest struct {
+	Intelligence string `json:"intelligence"`
+	Class        string `json:"class"`
 }
 
 type OpenAIModelsResponse struct {
@@ -145,7 +153,9 @@ func main() {
 	mux.HandleFunc("/healthz", router.healthz)
 	mux.HandleFunc("/status", router.status)
 	mux.HandleFunc("/v1/status", router.status)
-	mux.HandleFunc("/v1/router/model", router.switchModel)
+	mux.HandleFunc("/model", router.model)
+	mux.HandleFunc("/set-model", router.setModel)
+	mux.HandleFunc("/set-intelligence", router.setIntelligence)
 	mux.HandleFunc("/v1/models", router.models)
 	mux.HandleFunc("/v1/chat/completions", router.chatCompletions)
 
@@ -200,12 +210,27 @@ func (r *Router) healthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (r *Router) status(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, r.modelState())
+}
+
+func (r *Router) model(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	writeJSON(w, http.StatusOK, r.modelState())
+}
+
+func (r *Router) modelState() StatusResponse {
 	r.mu.RLock()
 	active := cloneStringMap(r.active)
+	current := r.current
 	r.mu.RUnlock()
 
 	providers := make(map[string]string, len(r.config.Providers))
 	models := make([]StatusModel, 0)
+	currentModel := active[current]
+	currentProvider := ""
 	for providerName, provider := range r.config.Providers {
 		state := "disabled"
 		if provider.Enabled {
@@ -221,33 +246,40 @@ func (r *Router) status(w http.ResponseWriter, _ *http.Request) {
 				Enabled:  provider.Enabled && model.Enabled,
 				Active:   active[class] == modelName,
 			})
+			if provider.Enabled && model.Enabled && modelName == currentModel {
+				currentProvider = providerName
+			}
 		}
 	}
 
-	writeJSON(w, http.StatusOK, StatusResponse{
-		Status:    "ok",
-		Listen:    r.config.Listen,
-		Active:    active,
-		Providers: providers,
-		Models:    models,
-	})
+	return StatusResponse{
+		Status:              "ok",
+		Listen:              r.config.Listen,
+		CurrentIntelligence: current,
+		CurrentModel:        currentModel,
+		CurrentProvider:     currentProvider,
+		Active:              active,
+		Providers:           providers,
+		Models:              models,
+	}
 }
 
-func (r *Router) switchModel(w http.ResponseWriter, req *http.Request) {
+func (r *Router) setModel(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
 		return
 	}
 
-	var body SwitchRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1<<20)).Decode(&body); err != nil {
+	var body SetModelRequest
+	if err := decodeSmallJSON(w, req, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-
-	class := normalizedClass(body.Class)
-	if class == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "class must be smart or dumb")
+	if body.Model == "" {
+		body.Model = req.URL.Query().Get("model")
+	}
+	if body.Model == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "model is required")
 		return
 	}
 	choice, err := r.findSpecificModel(body.Model)
@@ -255,17 +287,61 @@ func (r *Router) switchModel(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "model_not_found", err.Error())
 		return
 	}
-	if choice.Class != class {
-		writeError(w, http.StatusBadRequest, "class_mismatch", fmt.Sprintf("model %q is class %q, not %q", body.Model, choice.Class, class))
+	if choice.Class == "" {
+		writeError(w, http.StatusBadRequest, "invalid_model", fmt.Sprintf("model %q must be configured as smart or dumb", body.Model))
 		return
 	}
 
-	r.setActive(class, choice.PublicModel)
+	r.setActive(choice.Class, choice.PublicModel)
+	r.setCurrent(choice.Class)
 	writeJSON(w, http.StatusOK, map[string]string{
-		"status":   "ok",
-		"class":    class,
-		"model":    choice.PublicModel,
-		"provider": choice.ProviderName,
+		"status":       "ok",
+		"intelligence": choice.Class,
+		"model":        choice.PublicModel,
+		"provider":     choice.ProviderName,
+	})
+}
+
+func (r *Router) setIntelligence(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+
+	var body SetIntelligenceRequest
+	if err := decodeSmallJSON(w, req, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	intelligence := body.Intelligence
+	if intelligence == "" {
+		intelligence = body.Class
+	}
+	if intelligence == "" {
+		intelligence = req.URL.Query().Get("intelligence")
+	}
+	if intelligence == "" {
+		intelligence = req.URL.Query().Get("class")
+	}
+
+	class := normalizedClass(intelligence)
+	if class == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "intelligence must be smart or dumb")
+		return
+	}
+	if r.getActive(class) == "" {
+		choices := r.classChoices(class)
+		if len(choices) == 0 {
+			writeError(w, http.StatusBadRequest, "model_not_found", fmt.Sprintf("no enabled %q model", class))
+			return
+		}
+		r.setActive(class, choices[0].PublicModel)
+	}
+	r.setCurrent(class)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "ok",
+		"intelligence": class,
+		"model":        r.getActive(class),
 	})
 }
 
@@ -300,6 +376,9 @@ func (r *Router) chatCompletions(w http.ResponseWriter, req *http.Request) {
 	if err := json.Unmarshal(body, &chatReq); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
+	}
+	if strings.TrimSpace(chatReq.Model) == "" {
+		chatReq.Model = r.getCurrent()
 	}
 
 	choices, err := r.chooseModels(chatReq.Model)
@@ -459,8 +538,23 @@ func (r *Router) initActiveModels() {
 		choices := r.classChoices(class)
 		if len(choices) > 0 {
 			r.active[class] = choices[0].PublicModel
+			if r.current == "" {
+				r.current = class
+			}
 		}
 	}
+}
+
+func (r *Router) getCurrent() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.current
+}
+
+func (r *Router) setCurrent(class string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.current = class
 }
 
 func (r *Router) getActive(class string) string {
@@ -802,6 +896,20 @@ func copyResponse(w http.ResponseWriter, upstream *http.Response) {
 	}
 	w.WriteHeader(upstream.StatusCode)
 	_, _ = io.Copy(w, upstream.Body)
+}
+
+func decodeSmallJSON(w http.ResponseWriter, req *http.Request, out interface{}) error {
+	if req.Body == nil || req.ContentLength == 0 {
+		return nil
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1<<20))
+	if err := decoder.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value interface{}) {
