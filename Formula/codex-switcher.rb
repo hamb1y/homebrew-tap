@@ -3,7 +3,7 @@ class CodexSwitcher < Formula
   homepage "https://github.com/hamb1y/homebrew-tap"
   url "https://raw.githubusercontent.com/hamb1y/homebrew-tap/main/bin/codex-switcher"
   version "0.1.0"
-  sha256 "52e07f8f70edc0a0ee2d622d2d46241409b089840ce2a5cabf2be77f42e370c2"
+  sha256 "553086b2f42b4bdbe5b635c81ece7873a76f1a79f135e1e8a2f85211458cb08d"
   license :cannot_represent
 
   depends_on "gum"

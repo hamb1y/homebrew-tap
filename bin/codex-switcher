@@ -297,7 +297,7 @@ show_status() {
     warn "No active auth file."
   fi
   echo
-  if has_accounts && [[ -t 0 && -t 1 ]]; then
+  if has_accounts && [[ -t 0 && -t 1 ]] && command -v gum >/dev/null 2>&1; then
     list_accounts | gum table --separator $'\t' --height 12
   else
     list_accounts
