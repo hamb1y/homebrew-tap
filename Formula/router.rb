@@ -41,7 +41,7 @@ class Router < Formula
   def router_config_template
     <<~JSON
       {
-        "listen": "127.0.0.1:8080",
+        "listen": "0.0.0.0:8080",
         "timeout_ms": 120000,
         "providers": {
           "openai": {
@@ -188,6 +188,10 @@ class Router < Formula
       - `keys.json`: API keys referenced by `api_key_ref`.
       - `auth/`: manually managed OAuth2 JSON files.
 
+      The default `listen` value is `0.0.0.0:8080`, which is reachable from
+      localhost and private network interfaces such as Tailscale. Change it to
+      `127.0.0.1:8080` if you only want local access.
+
       Run:
 
       ```sh
@@ -208,6 +212,9 @@ class Router < Formula
         -H 'content-type: application/json' \\
         -d '{"class":"smart","model":"smart"}'
       ```
+
+      To use a specific configured model for one request, set the chat request
+      `model` field to that configured model name instead of `smart` or `dumb`.
 
       OAuth2 auth files are read from `auth/` by default. For example, a provider
       with `"auth_file": "codex.json"` reads `~/.config/router/auth/codex.json`.

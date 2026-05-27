@@ -168,7 +168,7 @@ func NewRouter(configPath, keysPath string) (*Router, error) {
 		return nil, err
 	}
 	if cfg.Listen == "" {
-		cfg.Listen = "127.0.0.1:8080"
+		cfg.Listen = "0.0.0.0:8080"
 	}
 	if cfg.TimeoutMS <= 0 {
 		cfg.TimeoutMS = 120000
