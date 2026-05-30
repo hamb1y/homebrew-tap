@@ -3,8 +3,8 @@ class Sudogranter < Formula
   homepage "https://github.com/hamb1y/homebrew-tap"
   url "https://github.com/hamb1y/homebrew-tap.git", branch: "main"
   version "0.1.0"
-  revision 1
   license :cannot_represent
+  revision 1
 
   depends_on "go" => :build
 
