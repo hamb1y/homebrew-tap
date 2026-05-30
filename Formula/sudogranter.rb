@@ -29,10 +29,6 @@ class Sudogranter < Formula
     EOS
   end
 
-  def post_install
-    ohai "sudogranter systemd setup", systemd_instructions
-  end
-
   def caveats
     systemd_instructions
   end
