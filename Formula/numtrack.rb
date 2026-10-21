@@ -8,8 +8,8 @@ class Numtrack < Formula
   license :cannot_represent
   head "https://github.com/hamb1y/numtrack.git", branch: "main"
 
-  depends_on "python@3.14"
   depends_on :linux
+  depends_on "python@3.14"
 
   resource "evdev" do
     url "https://files.pythonhosted.org/packages/a5/f5/397b61091120a9ca5001041dd7bf76c385b3bfd67a0e5bcb74b852bd22a4/evdev-1.9.3.tar.gz"
@@ -48,7 +48,8 @@ class Numtrack < Formula
       [bindings]
       KEY_KP5 = "passthrough"
     TOML
-    assert_match "Configuration valid", shell_output("#{bin}/numtrack --config #{testpath}/config.toml --check-config")
+    output = shell_output("#{bin}/numtrack --config #{testpath}/config.toml --check-config")
+    assert_match "Configuration valid", output
     assert_match 'enabled = "numlock"', shell_output("#{bin}/numtrack --print-config")
   end
 end
