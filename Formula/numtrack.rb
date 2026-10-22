@@ -3,8 +3,8 @@ class Numtrack < Formula
 
   desc "NumLock-toggled numpad mouse for Linux Wayland desktops"
   homepage "https://github.com/hamb1y/numtrack"
-  url "https://github.com/hamb1y/numtrack/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "e77a83690e2c2c8cbb4ca4d810a1a6f74c5f8d1b85b597fb5ec4f55e3a81c5bb"
+  url "https://github.com/hamb1y/numtrack/archive/refs/tags/v0.2.1.tar.gz"
+  sha256 "bab89123bef90a725eb0aba90a15ed33c00b44ee5540ad4f67501da619c3a6e8"
   license :cannot_represent
   head "https://github.com/hamb1y/numtrack.git", branch: "main"
 
