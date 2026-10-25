@@ -14,7 +14,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: src/router/go.mod
+          go-version: 'stable'
+          cache: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -31,3 +32,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make -C src/aroot test
+      - name: Verify production aroot installation and authorization
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS,RUNNER_ENVIRONMENT env AROOT_EPHEMERAL_ROOT_TEST=1 bash src/aroot/tests-root.sh
