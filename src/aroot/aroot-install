@@ -1,0 +1,38 @@
+#!/bin/bash
+set -euo pipefail
+# Runs from either a built source directory or Homebrew's share/aroot directory.
+source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+stage="${DESTDIR:-}"
+if [[ $# != 0 ]]; then
+  printf 'Usage: [DESTDIR=/staging/root] %s\n' "$0" >&2
+  exit 2
+fi
+if [[ -z "$stage" && $EUID != 0 ]]; then
+  printf 'System installation requires an explicit administrator invocation. Use DESTDIR to stage.\n' >&2
+  exit 1
+fi
+if [[ -n "$stage" && "$stage" != /* ]]; then
+  printf 'DESTDIR must be an absolute path.\n' >&2
+  exit 1
+fi
+if [[ -n "$stage" ]]; then
+  stage="$(realpath -m -- "$stage")"
+  [[ "$stage" != / ]] || { printf 'Use an unset DESTDIR for an explicit system installation.\n' >&2; exit 2; }
+fi
+for binary in arootd aroot-client aroot-admin; do
+  [[ -x "$source_dir/$binary" ]] || { printf 'Build or reinstall aroot first: missing %s\n' "$binary" >&2; exit 1; }
+done
+install -d -m 0755 "$stage/usr/libexec" "$stage/usr/bin" "$stage/usr/sbin" "$stage/etc/systemd/system"
+install -m 0755 "$source_dir/arootd" "$source_dir/aroot-client" "$stage/usr/libexec/"
+install -m 0755 "$source_dir/aroot-admin" "$stage/usr/sbin/aroot-admin"
+install -m 0755 "$source_dir/aroot" "$stage/usr/bin/aroot"
+install -m 0644 "$source_dir/aroot.service" "$stage/etc/systemd/system/aroot.service"
+install -d -m 0700 "$stage/etc/aroot" "$stage/etc/aroot/users" "$stage/var/log/aroot"
+if [[ -z "$stage" ]]; then
+  if ! getent group aroot >/dev/null; then groupadd --system aroot; fi
+  chown root:root /usr/libexec/arootd /usr/libexec/aroot-client /usr/sbin/aroot-admin /usr/bin/aroot /etc/systemd/system/aroot.service /etc/aroot /etc/aroot/users /var/log/aroot
+  systemctl daemon-reload
+  printf 'Installed. Grant a UID and group membership; explicitly activate with: systemctl enable --now aroot.service\n'
+else
+  printf 'Staged under %s; no service or group changes were made.\n' "$stage"
+fi

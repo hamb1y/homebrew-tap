@@ -1,0 +1,33 @@
+name: Test utilities
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  router-switcher:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/router/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: go test -race ./...
+        working-directory: src/router
+        env:
+          ROUTER_TEST_NETWORK: '1'
+      - run: bash -n bin/codex-switcher
+      - run: python3 -m unittest discover -s tests -v
+      - name: Parse formulas
+        run: for file in Formula/*.rb; do ruby -c "$file"; done
+  aroot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C src/aroot test

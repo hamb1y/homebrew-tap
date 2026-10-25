@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+stage="${DESTDIR:-}"
+if [[ $# != 0 || ( -n "$stage" && "$stage" != /* ) ]]; then
+  printf 'Usage: [DESTDIR=/absolute/staging/root] %s\n' "$0" >&2
+  exit 2
+fi
+if [[ -n "$stage" ]]; then
+  stage="$(realpath -m -- "$stage")"
+  [[ "$stage" != / ]] || { printf 'Use an unset DESTDIR for an explicit system uninstall.\n' >&2; exit 2; }
+fi
+if [[ -z "$stage" ]]; then
+  [[ $EUID == 0 ]] || { printf 'Uninstall requires root or DESTDIR.\n' >&2; exit 1; }
+  systemctl disable --now aroot.service
+fi
+rm -f -- "$stage/usr/libexec/arootd" "$stage/usr/libexec/aroot-client" "$stage/usr/sbin/aroot-admin" "$stage/usr/bin/aroot" "$stage/etc/systemd/system/aroot.service"
+if [[ -z "$stage" ]]; then systemctl daemon-reload; fi
+printf 'Removed programs and service. Preserved /etc/aroot grants and /var/log/aroot audit history; remove deliberately if no longer needed. User token files and aroot group membership are also retained.\n'

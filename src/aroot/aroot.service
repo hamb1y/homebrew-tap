@@ -1,0 +1,21 @@
+[Unit]
+Description=aroot explicit token-authorized administrator command service
+Documentation=https://github.com/hamb1y/homebrew-tap/tree/main/src/aroot
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/arootd
+User=root
+Group=aroot
+RuntimeDirectory=aroot
+RuntimeDirectoryMode=0750
+UMask=0077
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=5
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

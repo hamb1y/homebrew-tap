@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -142,11 +142,29 @@ type AnthropicUsage struct {
 func main() {
 	configPath := flag.String("config", defaultConfigPath("router.json"), "router config file")
 	keysPath := flag.String("keys", defaultConfigPath("keys.json"), "api key config file")
+	initialize := flag.Bool("init", false, "create private config templates without overwriting existing files")
+	check := flag.Bool("check", false, "validate config and exit")
+	version := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *version {
+		fmt.Println("router 0.2.0")
+		return
+	}
+	if *initialize {
+		if err := initConfig(*configPath, *keysPath); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	router, err := NewRouter(*configPath, *keysPath)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *check {
+		fmt.Println("router config valid")
+		return
 	}
 
 	mux := http.NewServeMux()
@@ -163,6 +181,7 @@ func main() {
 		Addr:              router.config.Listen,
 		Handler:           logRequests(mux),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("router listening on %s", router.config.Listen)
@@ -178,10 +197,14 @@ func NewRouter(configPath, keysPath string) (*Router, error) {
 		return nil, err
 	}
 	if cfg.Listen == "" {
-		cfg.Listen = "0.0.0.0:8080"
+		cfg.Listen = "127.0.0.1:8080"
 	}
 	if cfg.TimeoutMS <= 0 {
 		cfg.TimeoutMS = 120000
+	}
+
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	keys := KeysFile{Keys: map[string]string{}}
@@ -197,7 +220,8 @@ func NewRouter(configPath, keysPath string) (*Router, error) {
 		keys:      keys.Keys,
 		configDir: filepath.Dir(configPath),
 		httpClient: &http.Client{
-			Timeout: time.Duration(cfg.TimeoutMS) * time.Millisecond,
+			Timeout:       time.Duration(cfg.TimeoutMS) * time.Millisecond,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		active: map[string]string{},
 	}
@@ -205,11 +229,17 @@ func NewRouter(configPath, keysPath string) (*Router, error) {
 	return router, nil
 }
 
-func (r *Router) healthz(w http.ResponseWriter, _ *http.Request) {
+func (r *Router) healthz(w http.ResponseWriter, req *http.Request) {
+	if !requireGET(w, req) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (r *Router) status(w http.ResponseWriter, _ *http.Request) {
+func (r *Router) status(w http.ResponseWriter, req *http.Request) {
+	if !requireGET(w, req) {
+		return
+	}
 	writeJSON(w, http.StatusOK, r.modelState())
 }
 
@@ -252,6 +282,7 @@ func (r *Router) modelState() StatusResponse {
 		}
 	}
 
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
 	return StatusResponse{
 		Status:              "ok",
 		Listen:              r.config.Listen,
@@ -345,7 +376,10 @@ func (r *Router) setIntelligence(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (r *Router) models(w http.ResponseWriter, _ *http.Request) {
+func (r *Router) models(w http.ResponseWriter, req *http.Request) {
+	if !requireGET(w, req) {
+		return
+	}
 	data := make([]OpenAIModel, 0)
 	for providerName, provider := range r.config.Providers {
 		if !provider.Enabled {
@@ -357,6 +391,7 @@ func (r *Router) models(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 	}
+	sort.Slice(data, func(i, j int) bool { return data[i].ID < data[j].ID })
 	writeJSON(w, http.StatusOK, OpenAIModelsResponse{Object: "list", Data: data})
 }
 
@@ -372,9 +407,18 @@ func (r *Router) chatCompletions(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request must be a JSON object")
+		return
+	}
 	var chatReq ChatRequest
 	if err := json.Unmarshal(body, &chatReq); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if len(chatReq.Messages) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "messages must not be empty")
 		return
 	}
 	if strings.TrimSpace(chatReq.Model) == "" {
@@ -399,10 +443,15 @@ func (r *Router) chatCompletions(w http.ResponseWriter, req *http.Request) {
 		var upstream *http.Response
 		switch normalizeType(choice.Provider.Type) {
 		case "anthropic_api", "anthropic":
-			upstream, err = r.callAnthropic(ctx, choice, attemptReq)
+			if err = validateAnthropicFields(fields, attemptReq); err == nil {
+				upstream, err = r.callAnthropic(ctx, choice, attemptReq)
+			}
 		default:
 			var rewritten []byte
-			rewritten, err = json.Marshal(attemptReq)
+			fields["model"], err = json.Marshal(choice.UpstreamModel)
+			if err == nil {
+				rewritten, err = json.Marshal(fields)
+			}
 			if err == nil {
 				upstream, err = r.callOpenAICompatible(ctx, choice, rewritten)
 			}
@@ -452,7 +501,7 @@ func (r *Router) chooseModels(model string) ([]ModelChoice, error) {
 		if err != nil {
 			return nil, err
 		}
-		return append([]ModelChoice{choice}, r.sameClassFallbacks(choice.Class, choice.PublicModel)...), nil
+		return []ModelChoice{choice}, nil
 	}
 
 	choices := r.classChoices(wantClass)
@@ -487,17 +536,8 @@ func (r *Router) classChoices(class string) []ModelChoice {
 			}
 		}
 	}
+	sort.Slice(choices, func(i, j int) bool { return choices[i].PublicModel < choices[j].PublicModel })
 	return choices
-}
-
-func (r *Router) sameClassFallbacks(class, exclude string) []ModelChoice {
-	var out []ModelChoice
-	for _, choice := range orderChoices(r.classChoices(class), r.getActive(class)) {
-		if choice.PublicModel != exclude {
-			out = append(out, choice)
-		}
-	}
-	return out
 }
 
 func buildChoice(providerName string, provider ProviderConfig, publicName string, cfg ModelConfig) ModelChoice {
@@ -705,6 +745,9 @@ func (r *Router) applyAuth(req *http.Request, provider ProviderConfig) error {
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	default:
+		if normalizeType(provider.Type) == "openai_compatible" && provider.APIKeyRef == "" {
+			return nil
+		}
 		key, err := r.apiKey(provider)
 		if err != nil {
 			return err
@@ -738,17 +781,19 @@ func (r *Router) oauthBearer(provider ProviderConfig) (string, error) {
 	if err := readJSON(path, &raw); err != nil {
 		return "", err
 	}
-	for _, key := range []string{"access_token", "accessToken", "id_token", "token"} {
+	for _, key := range []string{"access_token", "accessToken", "token"} {
 		if value, ok := raw[key].(string); ok && value != "" {
 			return value, nil
 		}
 	}
-	if credentials, ok := raw["credentials"].(map[string]interface{}); ok {
-		if value, ok := credentials["access_token"].(string); ok && value != "" {
-			return value, nil
+	for _, section := range []string{"credentials", "tokens"} {
+		if credentials, ok := raw[section].(map[string]interface{}); ok {
+			if value, ok := credentials["access_token"].(string); ok && value != "" {
+				return value, nil
+			}
 		}
 	}
-	return "", fmt.Errorf("auth file %s does not contain access_token, accessToken, id_token, or token", path)
+	return "", fmt.Errorf("auth file %s does not contain an access token", path)
 }
 
 func flattenSystemMessages(messages []ChatMessage) []map[string]interface{} {
@@ -876,25 +921,47 @@ func readJSON(path string, out interface{}) error {
 	defer file.Close()
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(out)
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("expected exactly one JSON value")
+	}
+	return nil
 }
 
 func copyResponse(w http.ResponseWriter, upstream *http.Response) {
-	for key, values := range upstream.Header {
-		if strings.EqualFold(key, "Content-Length") {
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(key, value)
+	// RFC 9110: Connection can nominate additional hop-by-hop fields.
+	hop := map[string]bool{"Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true, "Proxy-Authorization": true, "Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true, "Content-Length": true}
+	for _, value := range upstream.Header.Values("Connection") {
+		for _, name := range strings.Split(value, ",") {
+			hop[http.CanonicalHeaderKey(strings.TrimSpace(name))] = true
 		}
 	}
-	contentType := upstream.Header.Get("Content-Type")
-	if contentType != "" {
-		if mediatype, _, err := mime.ParseMediaType(contentType); err == nil {
-			w.Header().Set("Content-Type", mediatype)
+	for key, values := range upstream.Header {
+		if !hop[http.CanonicalHeaderKey(key)] {
+			w.Header()[key] = append([]string(nil), values...)
 		}
 	}
 	w.WriteHeader(upstream.StatusCode)
+	if strings.HasPrefix(strings.ToLower(upstream.Header.Get("Content-Type")), "text/event-stream") {
+		controller := http.NewResponseController(w)
+		_ = controller.Flush()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := upstream.Body.Read(buf)
+			if n > 0 {
+				if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+					return
+				}
+				_ = controller.Flush()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
 	_, _ = io.Copy(w, upstream.Body)
 }
 
@@ -908,6 +975,10 @@ func decodeSmallJSON(w http.ResponseWriter, req *http.Request, out interface{}) 
 			return nil
 		}
 		return err
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("expected exactly one JSON value")
 	}
 	return nil
 }
@@ -970,4 +1041,130 @@ func logRequests(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+func requireGET(w http.ResponseWriter, req *http.Request) bool {
+	if req.Method == http.MethodGet {
+		return true
+	}
+	w.Header().Set("Allow", "GET")
+	writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+	return false
+}
+
+func validateConfig(cfg Config) error {
+	seen := map[string]string{}
+	for name, provider := range cfg.Providers {
+		if !provider.Enabled {
+			continue
+		}
+		if strings.TrimSpace(provider.Type) == "" {
+			return fmt.Errorf("provider %q requires type", name)
+		}
+		if provider.BaseURL != "" {
+			u, err := url.Parse(provider.BaseURL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				return fmt.Errorf("provider %q has invalid base_url", name)
+			}
+		}
+
+		kind := normalizeType(provider.Type)
+		switch kind {
+		case "codex_oauth2", "codex", "google_antigravity_oauth2", "antigravity", "google_vertex", "vertex":
+			if provider.AuthFile == "" {
+				return fmt.Errorf("provider %q requires auth_file", name)
+			}
+		default:
+			if provider.APIKeyRef == "" && kind != "openai_compatible" {
+				return fmt.Errorf("provider %q requires api_key_ref", name)
+			}
+		}
+		if kind != "anthropic" && kind != "anthropic_api" {
+			if _, err := (&Router{}).providerBaseURL(provider); err != nil {
+				return fmt.Errorf("provider %q: %w", name, err)
+			}
+		}
+
+		for model, mc := range provider.Models {
+			if !mc.Enabled {
+				continue
+			}
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("provider %q has empty model name", name)
+			}
+			if previous, ok := seen[model]; ok {
+				return fmt.Errorf("duplicate enabled model %q in %q and %q", model, previous, name)
+			}
+			seen[model] = name
+			if mc.Class != "" && normalizedClass(mc.Class) == "" {
+				return fmt.Errorf("model %q class must be smart or dumb", model)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return errors.New("configuration must enable at least one model")
+	}
+	return nil
+}
+
+func validateAnthropicFields(fields map[string]json.RawMessage, req ChatRequest) error {
+	allowed := map[string]bool{"model": true, "messages": true, "stream": true, "max_tokens": true, "temperature": true, "top_p": true}
+	for field := range fields {
+		if !allowed[field] {
+			return fmt.Errorf("anthropic adapter does not support request field %q; use an OpenAI-compatible provider", field)
+		}
+	}
+	for _, msg := range req.Messages {
+		if msg.Role != "system" && msg.Role != "user" && msg.Role != "assistant" {
+			return fmt.Errorf("anthropic adapter does not support role %q", msg.Role)
+		}
+		if _, ok := msg.Content.(string); !ok {
+			return errors.New("anthropic adapter supports text content only")
+		}
+	}
+	return nil
+}
+
+func initConfig(configPath, keysPath string) error {
+	files := []struct{ path, data string }{
+		{expandPath(configPath), `{
+  "listen": "127.0.0.1:8080",
+  "timeout_ms": 120000,
+  "providers": {
+    "local": {
+      "type": "openai_compatible",
+      "enabled": true,
+      "base_url": "http://127.0.0.1:11434/v1",
+      "models": {"local-model": {"enabled": true, "upstream_model": "your-model", "class": "smart"}}
+    }
+  }
+}
+`},
+		{expandPath(keysPath), `{
+  "keys": {}
+}
+`},
+	}
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0700); err != nil {
+			return err
+		}
+		fd, err := os.OpenFile(file.path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, writeErr := fd.WriteString(file.data)
+		closeErr := fd.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		fmt.Printf("Created %s\n", file.path)
+	}
+	return nil
 }
