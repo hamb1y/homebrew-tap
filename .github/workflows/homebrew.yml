@@ -1,0 +1,86 @@
+name: Verify Homebrew packages
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: '1'
+      HOMEBREW_NO_ENV_HINTS: '1'
+      HOMEBREW_NO_ASK: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use the runner's existing Homebrew
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew_command="$(command -v brew || true)"
+          if [[ -z "$brew_command" ]]; then
+            for prefix in /home/linuxbrew/.linuxbrew /opt/homebrew /usr/local; do
+              if [[ -x "$prefix/bin/brew" ]]; then
+                brew_command="$prefix/bin/brew"
+                break
+              fi
+            done
+          fi
+          if [[ -z "$brew_command" ]]; then
+            echo 'This hosted runner must provide Homebrew.' >&2
+            exit 1
+          fi
+          brew_prefix="$("$brew_command" --prefix)"
+          printf '%s\n' "$brew_prefix/bin" "$brew_prefix/sbin" >> "$GITHUB_PATH"
+          "$brew_command" --version
+      - name: Register and verify the exact checkout as the tap
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew tap --custom-remote hamb1y/tap "file://$GITHUB_WORKSPACE"
+          tap_path="$(brew --repository hamb1y/tap)"
+          git -C "$tap_path" fetch --no-tags "file://$GITHUB_WORKSPACE" "$GITHUB_SHA"
+          git -C "$tap_path" checkout --detach "$GITHUB_SHA"
+          test "$(git -C "$tap_path" rev-parse HEAD)" = "$GITHUB_SHA"
+          # Preserve the original numtrack blob without installing its formula.
+          test "$(git hash-object "$tap_path/Formula/numtrack.rb")" = b05bf5f09a7692f4238bfd28ad3f80fa5adbfb68
+          formulas=(hamb1y/tap/regi hamb1y/tap/router hamb1y/tap/codex-switcher)
+          if [[ "$RUNNER_OS" == Linux ]]; then formulas+=(hamb1y/tap/aroot); fi
+          if brew help trust >/dev/null 2>&1; then
+            brew trust --formula "${formulas[@]}"
+          fi
+      - name: Build and test regi, router and codex-switcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in regi router codex-switcher; do
+            formula="hamb1y/tap/$name"
+            if brew list --versions "$formula" >/dev/null 2>&1; then
+              echo "Unexpected preinstalled package: $formula" >&2
+              exit 1
+            fi
+            brew install --build-from-source --include-test "$formula"
+            brew test "$formula"
+          done
+      - name: Build and test staged aroot package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if brew list --versions hamb1y/tap/aroot >/dev/null 2>&1; then
+            echo 'Unexpected preinstalled aroot package.' >&2
+            exit 1
+          fi
+          brew install --build-from-source --include-test hamb1y/tap/aroot
+          brew test hamb1y/tap/aroot
+          test ! -e /usr/bin/aroot
+          test ! -e /etc/systemd/system/aroot.service
