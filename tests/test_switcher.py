@@ -14,7 +14,10 @@ class SwitcherTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # tempfile is trusted test infrastructure. macOS may return /var/folders
+        # through the system /var symlink; supply its physical path to the CLI.
+        # User-configured credential/store paths remain strictly uncanonicalized.
+        self.root = Path(self.temp.name).resolve()
         self.codex = self.root / 'custom-codex'
         self.codex.mkdir()
         self.auth = self.codex / 'auth.json'
@@ -83,6 +86,26 @@ class SwitcherTests(unittest.TestCase):
         (self.store/'accounts/evil').symlink_to(self.codex, target_is_directory=True)
         self.run_cli('switch', 'evil', ok=False)
 
+    def test_user_directory_symlinks_remain_rejected(self):
+        real_store = self.root/'real-store'
+        real_store.mkdir()
+        store_alias = self.root/'store-alias'
+        store_alias.symlink_to(real_store, target_is_directory=True)
+        self.env['CODEX_SWITCHER_DIR'] = str(store_alias/'profiles')
+        result = self.run_cli('save', 'Work', ok=False)
+        self.assertIn('symlink paths are not supported', result.stderr)
+        self.assertFalse((real_store/'profiles').exists())
+
+        self.env['CODEX_SWITCHER_DIR'] = str(self.store)
+        auth_alias = self.root/'auth-alias'
+        auth_alias.symlink_to(self.codex, target_is_directory=True)
+        self.env['CODEX_HOME'] = str(auth_alias)
+        original = self.auth.read_bytes()
+        result = self.run_cli('save', 'Work', ok=False)
+        self.assertIn('symlink paths are not supported', result.stderr)
+        self.assertEqual(self.auth.read_bytes(), original)
+        self.assertFalse((self.store/'accounts/work').exists())
+
     def test_switch_recovers_from_malformed_active_credentials(self):
         self.run_cli('save', 'Work')
         self.auth.write_text('malformed')
@@ -109,7 +132,11 @@ class SwitcherTests(unittest.TestCase):
         codex.write_text('''#!/usr/bin/env python3
 import json, os, pathlib, sys
 assert sys.argv[1:3] == ['-c', 'cli_auth_credentials_store="file"']
-assert pathlib.Path(os.environ['CODEX_HOME']).name.startswith('login.')
+login_home = pathlib.Path(os.environ['CODEX_HOME'])
+assert login_home.name.startswith('login.')
+assert login_home == login_home.resolve()
+assert login_home.parent == pathlib.Path(os.environ['CODEX_SWITCHER_DIR'])
+assert login_home.stat().st_mode & 0o777 == 0o700
 (pathlib.Path(os.environ['CODEX_HOME'])/'auth.json').write_text(json.dumps({'OPENAI_API_KEY':'new-login'}))
 ''' + ('sys.exit(1)\n' if fail else ''))
         gum.chmod(0o755); codex.chmod(0o755)
