@@ -2,11 +2,12 @@
 
 ```sh
 brew tap hamb1y/tap
-brew install hamb1y/tap/router hamb1y/tap/codex-switcher hamb1y/tap/regi
+brew install hamb1y/tap/router hamb1y/tap/codex-switcher hamb1y/tap/cc-switcher hamb1y/tap/regi
 ```
 
 - [router](docs/router.md): local OpenAI-compatible chat gateway with smart/dumb model classes, streaming and deterministic failover.
 - [codex-switcher](docs/codex-switcher.md): private snapshots of file-based Codex credentials, with a Gum menu and scripted operations.
+- [cc-switcher](docs/cc-switcher.md): isolated Claude Code accounts with a Gum menu and selected-profile launcher.
 - [aroot](src/aroot/README.md): token-authorized privileged helper, installed and enabled explicitly by an administrator.
 - [regi](https://github.com/hamb1y/regi): plaintext named registers.
 - numtrack remains unchanged in this update.

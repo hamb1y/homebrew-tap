@@ -53,16 +53,16 @@ jobs:
           test "$(git -C "$tap_path" rev-parse HEAD)" = "$GITHUB_SHA"
           # Preserve the original numtrack blob without installing its formula.
           test "$(git hash-object "$tap_path/Formula/numtrack.rb")" = b05bf5f09a7692f4238bfd28ad3f80fa5adbfb68
-          formulas=(hamb1y/tap/regi hamb1y/tap/router hamb1y/tap/codex-switcher)
+          formulas=(hamb1y/tap/regi hamb1y/tap/router hamb1y/tap/codex-switcher hamb1y/tap/cc-switcher)
           if [[ "$RUNNER_OS" == Linux ]]; then formulas+=(hamb1y/tap/aroot); fi
           if brew help trust >/dev/null 2>&1; then
             brew trust --formula "${formulas[@]}"
           fi
-      - name: Build and test regi, router and codex-switcher
+      - name: Build and test regi, router, codex-switcher and cc-switcher
         shell: bash
         run: |
           set -euo pipefail
-          for name in regi router codex-switcher; do
+          for name in regi router codex-switcher cc-switcher; do
             formula="hamb1y/tap/$name"
             if brew list --versions "$formula" >/dev/null 2>&1; then
               echo "Unexpected preinstalled package: $formula" >&2
