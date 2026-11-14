@@ -1,9 +1,9 @@
 class CcSwitcher < Formula
-  desc "Switch between isolated Claude Code accounts"
+  desc "Save and switch the login used by your existing Claude Code installation"
   homepage "https://github.com/hamb1y/cc-switcher"
-  url "https://raw.githubusercontent.com/hamb1y/cc-switcher/0b37d18cccc411355cfaaa596528311b57fd7e31/bin/cc-switcher"
-  version "0.1.0"
-  sha256 "a357625cb44fdfde8a45f08aeec6e1538fcfcd30eb32b9d13dc72f9ce3a8273e"
+  url "https://raw.githubusercontent.com/hamb1y/cc-switcher/9f81aebbd84a4b2a7e4a6d98e01ff64a83e26c75/bin/cc-switcher"
+  version "0.2.0"
+  sha256 "292b63e06f50055fa617773f9163ecf0d7776816e0a1c65d6822f536edc9276b"
   license :cannot_represent
 
   depends_on "gum"
@@ -16,21 +16,36 @@ class CcSwitcher < Formula
 
   def caveats
     <<~EOS
-      Install Claude Code separately, then run:
-        cc-switcher login Work
-        cc-switcher switch work
-        cc-switcher run
-      Selection affects cc-switcher run; plain claude is unchanged.
-      Each account has separate settings and session history.
-      Keep ~/.cc-switcher private; profiles and backups may contain credentials.
+      Save the current login: cc-switcher save Work
+      Activate a saved login: cc-switcher switch work
+      Close existing Claude sessions before switching, then launch claude normally.
+      Settings, sessions and MCP credentials are preserved.
+      Install Claude Code separately for login. Isolated login capture is Linux only;
+      on macOS use claude auth login, then cc-switcher save LABEL.
+      Profiles and backups contain credentials; keep ~/.cc-switcher private.
     EOS
   end
 
   test do
+    ENV["HOME"] = testpath
+    ENV["CLAUDE_CONFIG_DIR"] = testpath/"claude"
+    ENV["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = testpath/"claude"
     ENV["CC_SWITCHER_DIR"] = testpath/"profiles"
-    assert_match "cc-switcher 0.1.0", shell_output("#{bin}/cc-switcher --version")
-    assert_match "Selected: (none)", shell_output("#{bin}/cc-switcher status")
+    assert_match "cc-switcher 0.2.0", shell_output("#{bin}/cc-switcher --version")
+    assert_match "Active", shell_output("#{bin}/cc-switcher status")
     assert_equal 0700, (testpath/"profiles").stat.mode & 0777
-    assert_match "select a profile first", shell_output("#{bin}/cc-switcher run 2>&1", 1)
+    assert_match "profile does not exist", shell_output("#{bin}/cc-switcher switch missing 2>&1", 1)
+    if OS.linux?
+      (testpath/"claude").mkpath
+      auth = testpath/"claude/.credentials.json"
+      auth.write('{"claudeAiOauth":{"accessToken":"work-test"},"mcpOAuth":{"keep":true}}')
+      system bin/"cc-switcher", "save", "Work"
+      auth.unlink
+      auth.write('{"claudeAiOauth":{"accessToken":"other-test"},"mcpOAuth":{"keep":true}}')
+      system bin/"cc-switcher", "switch", "work"
+      assert_match "work-test", auth.read
+      assert_match "mcpOAuth", auth.read
+      assert_equal 0600, auth.stat.mode & 0777
+    end
   end
 end

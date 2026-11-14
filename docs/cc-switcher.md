@@ -1,44 +1,38 @@
-# cc-switcher 0.1.0
+# cc-switcher 0.2.0
 
-Named Claude Code accounts with a Gum menu and scripted commands. Each account uses its own stable `CLAUDE_CONFIG_DIR`, so Claude manages login persistence and refreshed credentials. Existing `~/.claude` configuration is left untouched.
-
-Install from the Homebrew tap once published:
+Save and switch the Claude subscription login used by your existing `claude` command. Uses the same save/switch/login/list/status/delete workflow as codex-switcher. Settings, project trust, sessions, plugins and MCP credentials stay in place.
 
 ```sh
 brew install hamb1y/tap/cc-switcher
-```
-
-Or install the script locally:
-
-```sh
-install -m 755 bin/cc-switcher ~/.local/bin/cc-switcher
-cc-switcher login Work
-cc-switcher login Personal
-cc-switcher switch work
-cc-switcher run
-cc-switcher run -- --model sonnet "Explain this project"
+cc-switcher save Work          # save the login already used by claude
+cc-switcher login Personal     # capture another login without changing the active one (Linux)
 cc-switcher list
+cc-switcher switch personal    # install the saved login in Claude's normal credential store
+claude                        # restart Claude after switching; no wrapper required
+cc-switcher save Personal --replace
 cc-switcher status
-cc-switcher delete personal
-cc-switcher                 # interactive Gum menu
+cc-switcher delete work        # move saved profile to private backups
+cc-switcher                   # Gum menu
 ```
 
-Requires Python 3 on Linux or macOS, and a separately installed Claude Code. Only the interactive menu needs Gum. IDs are lowercase labels with spaces converted to hyphens. `login` uses `claude auth login --claudeai` and does not select the new account. Existing profiles cannot be overwritten. Use `run --` before Claude flags. Claude's exit status is returned.
+Requires Python 3. Only the interactive menu and pickers need Gum. Install Claude Code separately for `login`. IDs are lowercase labels, with spaces replaced by hyphens. Explicit save replacement requires `--replace`; login never replaces an existing profile.
 
-`switch` selects the default account for subsequent `cc-switcher run` commands. It does not change plain `claude`, an existing session, or your shell environment. Each account has separate settings, MCP configuration, plugins and session history. User settings are not copied automatically. Managed Claude policies continue to apply.
+On Linux, switches the `claudeAiOauth` entry in `~/.claude/.credentials.json`. On macOS, switches the corresponding entry in Claude's Keychain document. Matching `oauthAccount` metadata is merged into Claude's global config. Other credential entries and settings are preserved. `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` are honored. Legacy `.config.json` is recognized. Keychain behavior has mocked tests; real account switching has not been tested on macOS.
 
-The private store defaults to `~/.cc-switcher`; override with `CC_SWITCHER_DIR`. Profile directories have mode 0700; switcher metadata has mode 0600. Credential storage within a configuration directory remains Claude's responsibility, including macOS Keychain storage. This implementation was tested on Linux with a fake CLI, not with real accounts or macOS Keychain.
+`login LABEL` uses a temporary configuration and secure-storage directory, captures a subscription login and removes the temporary directory on success, failure or cancellation. This isolated login capture currently supports Linux. On macOS, sign in with `claude auth login` and use `cc-switcher save LABEL` to capture it. Saved subscription logins can then be switched through Keychain. API-key, cloud-provider and keyless Console account switching are not supported.
 
-Credentials supplied through environment variables can override a selected account. `run` warns about common overrides without printing their values. Login also inherits the environment; unset external authentication variables before login. Existing file credentials are not imported. Log in separately for each profile.
+Close Claude sessions before switching: already-running sessions retain credentials in memory and can rewrite them. Environment tokens, API keys and configured authentication helpers can override the saved subscription login. Check the active login with `claude auth status` after switching. The tool does not change a running session.
 
-Deleted profiles and failed logins move to unique private backups. They may contain credentials and session history; do not commit or sync the store. Backups are not automatically pruned. Moving a profile does not revoke its server tokens or remove a macOS Keychain entry. Use Claude's logout in the original profile before deletion when revocation is needed. Do not move or rename active profile directories, particularly on macOS, where the configuration path may determine the credential-store identity.
+The profile store is `~/.cc-switcher`, or `CC_SWITCHER_DIR`. Directories are mode 0700; snapshots and backups are mode 0600. Replacements, deletions and overwritten active documents receive unique private backups. These contain credentials: do not sync or commit the store. Backups are not automatically pruned. Operations use a store lock and atomic file replacement. Metadata is restored if writing the credential document fails; the global config and credential store are separate writes, so keep other Claude processes closed during switching.
 
-Selection and metadata changes are locked and atomic. Deletion is refused for the selected profile or one launched through this tool that is still running. Processes launched outside the tool do not participate in its locks. Separate configuration directories do not isolate the newer keyless Claude Console sign-in; this tool's login command targets claude.ai subscriptions.
-
-Claude's documented multi-account mechanism: https://code.claude.com/docs/en/authentication#log-in-with-multiple-accounts
-
-Run tests without real credentials:
+Profiles are snapshots. Claude can refresh active tokens: use `save LABEL --replace` before switching away to retain refreshed credentials. Existing 0.1.0 file-based profiles are read directly without deleting or moving them; `switch ID` now activates them for plain `claude`. The obsolete selected-profile marker is ignored. The `run` wrapper was removed.
 
 ```sh
 python3 -m unittest discover -s tests -v
+```
+
+To install from source:
+
+```sh
+install -m 755 bin/cc-switcher ~/.local/bin/cc-switcher
 ```
