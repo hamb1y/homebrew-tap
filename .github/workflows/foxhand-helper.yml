@@ -1,0 +1,42 @@
+name: Update Foxhand helper
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foxhand-helper-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'hamb1y/homebrew-tap' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update formula from the latest stable Foxhand release
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$(curl -fsSL --retry 3 https://api.github.com/repos/hamb1y/foxhand/releases/latest)"
+          tag="$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' <<<"$release")"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            jq -e --arg asset "foxhand-host-$target" 'any(.assets[]; .name == $asset)' <<<"$release" >/dev/null
+          done
+          sums="$RUNNER_TEMP/foxhand-SHA256SUMS"
+          curl -fsSL --retry 3 "https://github.com/hamb1y/foxhand/releases/download/$tag/SHA256SUMS" -o "$sums"
+          python3 bin/update-foxhand-helper.py "$tag" "$sums"
+          ruby -c Formula/foxhand-helper.rb
+          git diff --check
+          if git diff --quiet -- Formula/foxhand-helper.rb; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/foxhand-helper.rb
+          git commit -m "Update foxhand-helper to $tag"
+          git push origin HEAD:main

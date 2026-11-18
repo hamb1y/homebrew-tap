@@ -10,7 +10,19 @@ brew install hamb1y/tap/router hamb1y/tap/codex-switcher hamb1y/tap/cc-switcher 
 - [cc-switcher](docs/cc-switcher.md): save and switch the login used by your existing Claude Code installation, with a Gum menu.
 - [aroot](src/aroot/README.md): token-authorized privileged helper, installed and enabled explicitly by an administrator.
 - [regi](https://github.com/hamb1y/regi): plaintext named registers.
+- [foxhand-helper](https://github.com/hamb1y/foxhand): native messaging helper for the Foxhand Firefox add-on.
 - numtrack remains unchanged in this update.
+
+## Foxhand
+
+```sh
+brew install hamb1y/tap/foxhand-helper
+foxhand-helper install
+```
+
+Run `foxhand-helper install` again after `brew upgrade foxhand-helper` to update the copy Firefox launches. To remove the helper, run `foxhand-helper uninstall` before `brew uninstall foxhand-helper`.
+
+The [tap updater](.github/workflows/foxhand-helper.yml) checks the latest stable Foxhand GitHub Release daily and pins the formula to its published checksums. It can also be run manually from the tap's Actions tab.
 
 ## Migrating sudogranter to aroot
 
