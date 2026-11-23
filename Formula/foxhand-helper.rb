@@ -1,28 +1,28 @@
 class FoxhandHelper < Formula
   desc "Native messaging and MCP helper for the Foxhand Firefox add-on"
   homepage "https://foxhand.pages.dev/"
-  version "0.6.2"
+  version "0.6.3"
   license "MPL-2.0"
 
   on_macos do
     on_arm do
       url "https://github.com/hamb1y/foxhand/releases/download/v#{version}/foxhand-host-darwin-arm64"
-      sha256 "3c944b0a9fb69e89612851273aaafc1f69b04e0f8f9fe7204a4d08b53ce30a8b"
+      sha256 "aa905322111b0a4601b1f3c3301bba14476e191fa788a3709d70fd4727cabf53"
     end
     on_intel do
       url "https://github.com/hamb1y/foxhand/releases/download/v#{version}/foxhand-host-darwin-x64"
-      sha256 "5e83e2a2ed50cf6f765e03305694ce2da4522baa1cb1b5debe7cef391fb59839"
+      sha256 "6f3f234aad740e966caa30813b800b73b02b532ef63d8599eab7caf6d5f1b114"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/hamb1y/foxhand/releases/download/v#{version}/foxhand-host-linux-arm64"
-      sha256 "3c35a02145b1224eb7c0b2ec34765767d887715c19ee5fcd813c34783d1ccc17"
+      sha256 "e5a117c6917b2d5f7440c71b66b77c509550d4fe8e6721f48603fb4f71073693"
     end
     on_intel do
       url "https://github.com/hamb1y/foxhand/releases/download/v#{version}/foxhand-host-linux-x64"
-      sha256 "44ea0c69ecd9f5d8f070cdc27ad09e3b574fd3391fa666b393b09714531c3469"
+      sha256 "5de0acbb48b70d23a83698b8356d2eef0e9cf3570f2240646902916618803144"
     end
   end
 
